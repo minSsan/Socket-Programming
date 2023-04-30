@@ -10,38 +10,68 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+/* constant */
 #define BACKLOG 10 /* pending connections queue의 길이 */
 #define BUFFER_SIZE 1024
 
+/* HTTP Response header format */
 #define HEADER_FORMAT "HTTP/1.1 %d %s\nContent-Length: %ld\nContent-Type: %s\n\n" /* status code | status text | 리소스 크기 | content type 순으로 입력 */
-#define NOTFOUND_CONTENT "<h1>404: NOT FOUND</h1>"
-#define SERVER_ERR_CONTENT "<h1>500: Internal Server Error</h1>"
 
-char content_type[50];
-char header[BUFFER_SIZE];
+/* error page filenames */
+#define NOTFOUND_FILENAME "notfound.html"
+#define SERVER_ERR_FILENAME "server_error.html" 
+#define BAD_REQUEST_FILENAME "bad_request.html"
 
-// https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types
+/* response header */
+char content_type[50];      // content-type value
+char header[BUFFER_SIZE];   // header
+
+/* functions */
+void find_contentType(char* uri);
+void make_header(int status_code, long content_lenght, char* content_type);
+void send_error(int fd, int status_code);
+void send_HTTP_response(int socket_fd, char* filename);
+
+// 참고: https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types
+// ? find_contentType 호출 후에 content-type 값이 content_type 변수에 저장된다.
 void find_contentType(char* uri) {
-    char* extension = strrchr(uri, '.');
+    /* 확장자 추출 */
+    char* extension = strrchr(uri, '.'); // strrchr: https://www.ibm.com/docs/ko/i/7.3?topic=functions-strrchr-locate-last-occurrence-character-in-string
+
+    /* .html file */
     if (strcmp(extension, ".html") == 0) {
         strcpy(content_type, "text/html");
-    } else if (strcmp(extension, ".png") == 0) {
+    } 
+    /* .png file */
+    else if (strcmp(extension, ".png") == 0) {
         strcpy(content_type, "image/png");
-    } else if (strcmp(extension, ".gif") == 0) {
+    } 
+    /* .gif file */
+    else if (strcmp(extension, ".gif") == 0) {
         strcpy(content_type, "image/gif");
-    } else if (strcmp(extension, ".jpeg") == 0) {
+    } 
+    /* .jpeg .jpg file */
+    else if (strcmp(extension, ".jpeg") == 0 || strcmp(extension, ".jpg") == 0) {
         strcpy(content_type, "image/jpeg");
-    } else if (strcmp(extension, ".pdf") == 0) {
+    } 
+    /* .pdf file */
+    else if (strcmp(extension, ".pdf") == 0) {
         strcpy(content_type, "application/pdf");
-    } else if (strcmp(extension, ".mp3") == 0) {
-        strcpy(content_type, "audio/mpeg"); // 다운로드: https://stackoverflow.com/questions/12017694/content-type-for-mp3-download-response
-    } else {
+    } 
+    /* .mp3 file */
+    else if (strcmp(extension, ".mp3") == 0) {
+        strcpy(content_type, "audio/mpeg");
+    } 
+    /* other */
+    else {
         strcpy(content_type, "text/plain");
     }
 }
 
-// https://developer.mozilla.org/en-US/docs/Web/HTTP/Status
+// 참고: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status
+// ? make_header 호출 후에 헤더 내용이 header 변수에 저장된다.
 void make_header(int status_code, long content_lenght, char* content_type) {
+    /* status code에 알맞는 status 문구를 결정한다. */
     char status_text[50];
 
     switch (status_code)
@@ -63,7 +93,123 @@ void make_header(int status_code, long content_lenght, char* content_type) {
             break;
     }
 
+    /* status code/text, content-type, content-length을 조합하여 헤더를 완성한다. */
     sprintf(header, HEADER_FORMAT, status_code, status_text, content_lenght, content_type);
+}
+
+// ? status_code에 대응되는 에러 response를 클라이언트에게 보낸다.
+// FILENAME을 잘못 설정한 경우(recursion 발생 가능성)를 대비하여 send_HTTP_response를 사용하지 X
+// FILENAME을 잘못 설정하더라도 status code를 담은 헤더를 전송하기 때문에, 브라우저 기본 제공 에러 화면을 띄울 수 있다.
+void send_error(int fd, int status_code) {
+    struct stat st;
+    int file_fd, read_n;
+    char file_buff[BUFFER_SIZE];
+    
+    switch (status_code)
+    {
+        case 400:
+            if (stat(BAD_REQUEST_FILENAME, &st) < 0) {
+                perror("[ERROR] Bad 400 Filename");
+            }
+            if ((file_fd = open(BAD_REQUEST_FILENAME, O_RDONLY)) < 0) {
+                perror("[ERROR] Failed To Open 400 Custom File");
+            }
+            /* 커스텀 에러 화면을 불러오는데 실패한 경우에도 status code를 담은 헤더를 보냄 */
+            make_header(400, st.st_size, "text/html"); 
+            write(fd, header, strlen(header));
+            while ((read_n = read(file_fd, file_buff, BUFFER_SIZE)) > 0) {
+                write(fd, file_buff, read_n);
+            } 
+            break;
+
+        case 404:
+            if (stat(NOTFOUND_FILENAME, &st) < 0) {
+                perror("[ERROR] Bad 404 Filename");
+            }
+            if ((file_fd = open(NOTFOUND_FILENAME, O_RDONLY)) < 0) {
+                perror("[ERROR] Failed To Open 404 Custom File");
+            }
+            /* 커스텀 에러 화면을 불러오는데 실패한 경우에도 status code를 담은 헤더를 보냄 */
+            make_header(404, st.st_size, "text/html");
+            write(fd, header, strlen(header));
+            while ((read_n = read(file_fd, file_buff, BUFFER_SIZE)) > 0) {
+                write(fd, file_buff, read_n);
+            } 
+            break;
+
+        case 500:
+        default:
+            if (stat(SERVER_ERR_FILENAME, &st) < 0) {
+                perror("[ERROR] Bad 500 Filename");
+            }
+            if ((file_fd = open(SERVER_ERR_FILENAME, O_RDONLY)) < 0) {
+                perror("[ERROR] Failed To Open 500 Custom File");
+            }
+            /* 커스텀 에러 화면을 불러오는데 실패한 경우에도 status code를 담은 헤더를 보냄 */
+            make_header(500, st.st_size, "text/html");
+            write(fd, header, strlen(header));
+            while ((read_n = read(file_fd, file_buff, BUFFER_SIZE)) > 0) {
+                write(fd, file_buff, read_n);
+            } 
+            break;
+    }
+}
+
+// ? 지정 소켓을 통해 filename에 대한 HTTP response를 전송하는 함수
+void send_HTTP_response(int socket_fd, char* filename) {
+    // *************** File 조회 ***************
+    /* struct stat
+    * 파일 정보를 얻기 위함
+    * content-length를 구할 때도 활용 가능
+    * 참고: https://www.it-note.kr/173
+    */
+    struct stat st;
+    // 파일 정보 조회를 실패한 경우
+    if (stat(filename, &st) < 0) {
+        perror("[ERROR] No File Matching With URI: ");
+        // 404 error
+        send_error(socket_fd, 404);
+        return ;
+    }
+    // ****************************************
+
+
+    // *************** File 열기 ***************
+    int file_fd;
+    if ((file_fd = open(filename, O_RDONLY)) < 0) {
+        perror("[ERROR] Failed To Open File:");
+        // 500 error
+        send_error(socket_fd, 500);
+        return ;
+    }
+    // ****************************************
+
+
+    // *********** Find Content Type ***********
+    find_contentType(filename); // content-type value 결정
+    // *****************************************
+
+
+    // ************** Make Header **************
+    make_header(200, st.st_size, content_type); // header value 결정
+    // *****************************************
+
+
+    // ************* Send Response *************
+    /* send header */
+    write(socket_fd, header, strlen(header));
+        
+    /* send body */
+    int read_n; /* 읽어들인 byte 수 */
+    char file_buffer[BUFFER_SIZE];
+    bzero((char *) &file_buffer, sizeof(file_buffer));
+    while ((read_n = read(file_fd, file_buffer, BUFFER_SIZE)) > 0) {
+        write(socket_fd, file_buffer, read_n);
+    }
+    // *****************************************
+
+    /* 읽어온 파일을 닫는다 */
+    close(file_fd);
 }
 
 int main(int argc, char *argv[]) {
@@ -108,7 +254,7 @@ int main(int argc, char *argv[]) {
     
     /* 소켓에 IP + PORT를 bind */
     if (bind(socket_fd, (struct sockaddr *) &server_address, sizeof(server_address)) < 0) {
-        perror("[ERROR] bind error:");
+        perror("[ERROR] bind error");
         exit(1);
     }
 
@@ -123,7 +269,7 @@ int main(int argc, char *argv[]) {
         printf("[INFO] listenning...\n");
         new_socket_fd = accept(socket_fd, (struct sockaddr *) &client_address, &client_len);
         if (new_socket_fd < 0) {
-            perror("[ERROR] accept error:");
+            perror("[ERROR] accept error");
             continue;
         }
 
@@ -138,85 +284,44 @@ int main(int argc, char *argv[]) {
 
         /* read_n: 읽어들인 byte 수 */
         if (read(new_socket_fd, buffer, BUFFER_SIZE) < 0) { // accept한 소켓에서 데이터를 읽고 buffer에 저장
-            perror("[ERROR] read error:");
-            // TODO: 500 error
-            make_header(500, sizeof(SERVER_ERR_CONTENT), "text/html");
-            write(new_socket_fd, header, strlen(header));
-            write(new_socket_fd, SERVER_ERR_CONTENT, sizeof(SERVER_ERR_CONTENT));
+            perror("[ERROR] read error");
+            // 500 error
+            send_error(new_socket_fd, 500);
             close(new_socket_fd);
             continue;
         }
-        printf("[INFO] message is\n%s\n", buffer);
+        printf("[INFO] Client Message is\n%s\n", buffer);
 
         // ex. GET / HTTP/1.1 (파일 경로를 지정하지 않은 경우)
         char* method = strtok(buffer, " "); // 메소드 명 -> "GET"
         char* uri = strtok(NULL, " "); // / HTTP/1.1을 공백 기준 tok = 요청 파일 -> "/"
 
+        /* Request 형식이 잘못된 경우 */
         if (method == NULL || uri == NULL) {
-            // TODO: 400 error
+            perror("[ERROR] Bad Request");
+            // 400 error
+            send_error(new_socket_fd, 400);
+            close(new_socket_fd);
+            continue;
         }
 
-        printf("[INFO] handling method: %s, uri: %s\n", method, uri);
+        printf("[INFO] method: %s, uri: %s\n", method, uri);
         /* uri text를 저장하기 위한 char 배열 */
         char uri_str[BUFFER_SIZE];
         strcpy(uri_str, uri);
 
-        // 파일 경로 없이 (IP + Port)만 명시한 경우 -> index.html로 대체
+        /* 파일 경로 없이 (IP + Port)만 명시한 경우 -> index.html로 대체 */
         if (strcmp(uri_str, "/") == 0) {
             // 기본 html 파일을 띄운다.
             strcpy(uri_str, "/index.html");
         }
 
-        // *************** File 조회 ***************
-        // 파일 정보 조회를 실패한 경우
-        if (stat(uri_str+1, &sb) < 0) {
-            perror("[ERROR] No File Matching with URI:");
-            // TODO: 404 error
-            make_header(404, sizeof(NOTFOUND_CONTENT), "text/html");
-            write(new_socket_fd, header, strlen(header));
-            write(new_socket_fd, NOTFOUND_CONTENT, sizeof(NOTFOUND_CONTENT));
-            close(new_socket_fd);
-            continue;
-        }
-        // ****************************************
+        /* client에게 HTTP response를 보낸다 */
+        send_HTTP_response(new_socket_fd, uri_str+1);
 
-        // *************** File 열기 ***************
-        int fd;
-        if ((fd = open(uri_str+1, O_RDONLY)) < 0) {
-            perror("[ERROR] Failed To Open File:");
-            // TODO: 500 error
-            make_header(500, sizeof(SERVER_ERR_CONTENT), "text/html");
-            write(new_socket_fd, header, strlen(header));
-            write(new_socket_fd, SERVER_ERR_CONTENT, sizeof(SERVER_ERR_CONTENT));
-            close(new_socket_fd);
-            continue;
-        }
-        // ****************************************
-
-        // *********** Find Content Type ***********
-        find_contentType(uri_str+1);
-        printf("[CHECK] content_type is %s\n", content_type);
-        // *****************************************
-
-        // ************* Make Header *************
-        make_header(200, sb.st_size, content_type);
-        printf("[CHECK] header is\n %s", header);
-        // ***************************************
-
-        write(new_socket_fd, header, strlen(header));
-
-        int read_n;
-        char file_buffer[BUFFER_SIZE];
-        bzero((char *) &file_buffer, sizeof(file_buffer));
-        while ((read_n = read(fd, file_buffer, BUFFER_SIZE)) > 0) {
-            printf("[CHECK] write buffer:\n%s\n", file_buffer);
-            write(new_socket_fd, file_buffer, read_n);
-        }
-
-        close(fd);
+        /* 현재 소켓은 닫는다 */
         close(new_socket_fd);
     }
 
     return 0;
 }
-
