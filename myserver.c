@@ -27,14 +27,14 @@ char content_type[50];      // content-type value
 char header[BUFFER_SIZE];   // header
 
 /* functions */
-void find_contentType(char* uri);
-void make_header(int status_code, long content_lenght, char* content_type);
+void set_contentType(char* uri);
+void make_header(int status_code, long content_lenght);
 void send_error(int fd, int status_code);
 void send_HTTP_response(int socket_fd, char* filename);
 
 // 참고: https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types
-// ? find_contentType 호출 후에 content-type 값이 content_type 변수에 저장된다.
-void find_contentType(char* uri) {
+// ? set_contentType 호출 후에 content-type 값이 content_type 변수에 저장된다.
+void set_contentType(char* uri) {
     /* 확장자 추출 */
     char* extension = strrchr(uri, '.'); // strrchr: https://www.ibm.com/docs/ko/i/7.3?topic=functions-strrchr-locate-last-occurrence-character-in-string
 
@@ -70,7 +70,7 @@ void find_contentType(char* uri) {
 
 // 참고: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status
 // ? make_header 호출 후에 헤더 내용이 header 변수에 저장된다.
-void make_header(int status_code, long content_lenght, char* content_type) {
+void make_header(int status_code, long content_lenght) {
     /* status code에 알맞는 status 문구를 결정한다. */
     char status_text[50];
 
@@ -115,7 +115,8 @@ void send_error(int fd, int status_code) {
                 perror("[ERROR] Failed To Open 400 Custom File");
             }
             /* 커스텀 에러 화면을 불러오는데 실패한 경우에도 status code를 담은 헤더를 보냄 */
-            make_header(400, st.st_size, "text/html"); 
+            strcpy(content_type, "text/html");
+            make_header(400, st.st_size); 
             write(fd, header, strlen(header));
             while ((read_n = read(file_fd, file_buff, BUFFER_SIZE)) > 0) {
                 write(fd, file_buff, read_n);
@@ -130,7 +131,8 @@ void send_error(int fd, int status_code) {
                 perror("[ERROR] Failed To Open 404 Custom File");
             }
             /* 커스텀 에러 화면을 불러오는데 실패한 경우에도 status code를 담은 헤더를 보냄 */
-            make_header(404, st.st_size, "text/html");
+            strcpy(content_type, "text/html");
+            make_header(404, st.st_size);
             write(fd, header, strlen(header));
             while ((read_n = read(file_fd, file_buff, BUFFER_SIZE)) > 0) {
                 write(fd, file_buff, read_n);
@@ -146,7 +148,8 @@ void send_error(int fd, int status_code) {
                 perror("[ERROR] Failed To Open 500 Custom File");
             }
             /* 커스텀 에러 화면을 불러오는데 실패한 경우에도 status code를 담은 헤더를 보냄 */
-            make_header(500, st.st_size, "text/html");
+            strcpy(content_type, "text/html");
+            make_header(500, st.st_size);
             write(fd, header, strlen(header));
             while ((read_n = read(file_fd, file_buff, BUFFER_SIZE)) > 0) {
                 write(fd, file_buff, read_n);
@@ -186,12 +189,12 @@ void send_HTTP_response(int socket_fd, char* filename) {
 
 
     // *********** Find Content Type ***********
-    find_contentType(filename); // content-type value 결정
+    set_contentType(filename); // content-type value 결정
     // *****************************************
 
 
     // ************** Make Header **************
-    make_header(200, st.st_size, content_type); // header value 결정
+    make_header(200, st.st_size); // header value 결정
     // *****************************************
 
 
